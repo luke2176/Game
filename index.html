@@ -111,7 +111,29 @@
 
         document.addEventListener('keydown', onKeyDown);
         document.addEventListener('keyup', onKeyUp);
+// 점프 관련 변수 추가
+let canJump = false;
 
+// 5. 키보드 입력 감지에 Space 추가
+const onKeyDown = (event) => {
+    switch (event.code) {
+        case 'KeyW': moveForward = true; break;
+        case 'KeyA': moveLeft = true; break;
+        case 'KeyS': moveBackward = true; break;
+        case 'KeyD': moveRight = true; break;
+        case 'Space': if (canJump === true) velocity.y += 350; canJump = false; break;
+    }
+};
+
+// 6. 애니메이션 루프 내부에 중력 로직 추가
+velocity.y -= 9.8 * 100.0 * delta; // 중력 가속도 (100은 질량값)
+mainCamera.position.y += (velocity.y * delta); // 카메라 높이 조절
+
+if (mainCamera.position.y < 1.6) { // 바닥 아래로 내려가지 않게 설정
+    velocity.y = 0;
+    mainCamera.position.y = 1.6;
+    canJump = true;
+}
         // 6. 애니메이션 루프 (프레임마다 업데이트)
         let prevTime = performance.now();
         function animate() {
@@ -155,4 +177,5 @@
         animate();
     </script>
 </body>
+
 </html>
