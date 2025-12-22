@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>WASD 가상 공간 이동</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            background: rgba(0,0,0,0.5);
+            padding: 20px;
+            text-align: center;
+            font-family: sans-serif;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="instructions">
+        <h1>클릭하여 시작</h1>
+        <p>(W, A, S, D = 이동 | Mouse = 시선 전환 | ESC = 종료)</p>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        // 1. 장면(Scene) 및 카메라 설정
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87ceeb); // 하늘색 배경
+        const camera = new THREE.Camera();
+        // 원근 카메라 (시야각, 비율, 최소/최대 거리)
+        const mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // 2. 조명 설정
+        const light = new THREE.HemisphereLight(0xeeeeff, 0x777788, 1);
+        scene.add(light);
+
+        // 3. 바닥 및 장애물 추가
+        // 바닥 (격자 무늬)
+        const grid = new THREE.GridHelper(100, 50);
+        scene.add(grid);
+
+        // 랜덤 박스들 (공간감을 위해)
+        for (let i = 0; i < 20; i++) {
+            const geometry = new THREE.BoxGeometry(2, 2, 2);
+            const material = new THREE.MeshPhongMaterial({ color: Math.random() * 0xffffff });
+            const box = new THREE.Mesh(geometry, material);
+            box.position.set(Math.random() * 40 - 20, 1, Math.random() * 40 - 20);
+            scene.add(box);
+        }
+
+        // 4. 컨트롤 설정 (WASD 및 마우스 시선)
+        const controls = new PointerLockControls(mainCamera, document.body);
+        const instructions = document.getElementById('instructions');
+
+        instructions.addEventListener('click', () => {
+            controls.lock();
+        });
+
+        controls.addEventListener('lock', () => {
+            instructions.style.display = 'none';
+        });
+
+        controls.addEventListener('unlock', () => {
+            instructions.style.display = 'block';
+        });
+
+        // 5. 키보드 입력 감지
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+
+        const onKeyDown = (event) => {
+            switch (event.code) {
+                case 'KeyW': moveForward = true; break;
+                case 'KeyA': moveLeft = true; break;
+                case 'KeyS': moveBackward = true; break;
+                case 'KeyD': moveRight = true; break;
+            }
+        };
+
+        const onKeyUp = (event) => {
+            switch (event.code) {
+                case 'KeyW': moveForward = false; break;
+                case 'KeyA': moveLeft = false; break;
+                case 'KeyS': moveBackward = false; break;
+                case 'KeyD': moveRight = false; break;
+            }
+        };
+
+        document.addEventListener('keydown', onKeyDown);
+        document.addEventListener('keyup', onKeyUp);
+
+        // 6. 애니메이션 루프 (프레임마다 업데이트)
+        let prevTime = performance.now();
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (controls.isLocked) {
+                const time = performance.now();
+                const delta = (time - prevTime) / 1000;
+
+                // 속도 감쇠 (부드러운 멈춤)
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+
+                // 방향 결정
+                direction.z = Number(moveForward) - Number(moveBackward);
+                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.normalize();
+
+                // 이동 가속
+                if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
+                if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
+
+                // 실제 카메라 이동 적용
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+
+                prevTime = time;
+            }
+
+            renderer.render(scene, mainCamera);
+        }
+
+        // 화면 크기 조절 대응
+        window.addEventListener('resize', () => {
+            mainCamera.aspect = window.innerWidth / window.innerHeight;
+            mainCamera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        mainCamera.position.y = 1.6; // 사람 눈높이 설정
+        animate();
+    </script>
+</body>
+</html>
