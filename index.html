@@ -2,22 +2,25 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>Three.js WASD 점프 및 충돌 구현</title>
+    <title>Three.js 완성형 가상 공간</title>
     <style>
-        body { margin: 0; overflow: hidden; }
+        body { margin: 0; overflow: hidden; background-color: #000; }
         #instructions {
             position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            color: white; background: rgba(0,0,0,0.5);
-            padding: 20px; text-align: center;
-            font-family: sans-serif; cursor: pointer; z-index: 10;
+            color: white; background: rgba(0,0,0,0.7);
+            padding: 30px; text-align: center;
+            font-family: 'Pretendard', sans-serif; cursor: pointer;
+            border-radius: 10px; border: 2px solid #fff;
         }
     </style>
 </head>
 <body>
     <div id="instructions">
         <h1>클릭하여 시작</h1>
-        <p>(W, A, S, D = 이동 | Space = 점프 | Mouse = 시선 전환)</p>
+        <p>W, A, S, D : 이동</p>
+        <p>SPACE : 점프</p>
+        <p>MOUSE : 시선 전환 (ESC: 중단)</p>
     </div>
 
     <script type="importmap">
@@ -33,46 +36,63 @@
         import * as THREE from 'three';
         import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
-        // 1. 장면 및 렌더러 설정
+        // --- [설정값 조정 공간] ---
+        const CONFIG = {
+            acceleration: 120.0, // 이동 가속도 (수치가 낮을수록 느려짐)
+            friction: 10.0,      // 마찰력 (수치가 높을수록 금방 멈춤)
+            jumpForce: 15.0,     // 점프 힘
+            gravity: 40.0,       // 중력 세기
+            playerHeight: 1.6,   // 눈높이
+            collisionDist: 1.2   // 벽 충돌 감지 거리
+        };
+
+        // 1. 기본 씬 설정
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87ceeb);
-        
-        const mainCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        scene.background = new THREE.Color(0x87ceeb); // 하늘색
+        scene.fog = new THREE.Fog(0x87ceeb, 0, 100);  // 안개 효과
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
         document.body.appendChild(renderer.domElement);
 
         // 2. 조명
-        const light = new THREE.HemisphereLight(0xeeeeff, 0x777788, 1);
-        scene.add(light);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        sunLight.position.set(10, 20, 10);
+        scene.add(sunLight);
 
-        // 3. 바닥 및 장애물 (충돌 감지 대상)
-        const objects = []; // 충돌을 감지할 물체들을 담는 배열
+        // 3. 바닥 및 장애물 생성
+        const objects = []; // 충돌 감지용 배열
         
-        const grid = new THREE.GridHelper(100, 50);
+        // 바닥 (Grid + Plane)
+        const grid = new THREE.GridHelper(100, 50, 0x444444, 0x888888);
         scene.add(grid);
 
-        // 실제 충돌판정을 위한 바닥 (투명하게 생성 가능)
-        const floorGeometry = new THREE.PlaneGeometry(100, 100);
-        floorGeometry.rotateX(-Math.PI / 2);
-        const floor = new THREE.Mesh(floorGeometry, new THREE.MeshPhongMaterial({ visible: false }));
+        const floor = new THREE.Mesh(
+            new THREE.PlaneGeometry(100, 100),
+            new THREE.MeshPhongMaterial({ color: 0x555555 })
+        );
+        floor.rotation.x = -Math.PI / 2;
         scene.add(floor);
         objects.push(floor);
 
-        // 랜덤 박스들 추가
-        for (let i = 0; i < 30; i++) {
-            const boxSize = Math.random() * 2 + 1;
-            const geometry = new THREE.BoxGeometry(boxSize, boxSize, boxSize);
-            const material = new THREE.MeshPhongMaterial({ color: Math.random() * 0xffffff });
-            const box = new THREE.Mesh(geometry, material);
-            
-            box.position.set(Math.random() * 40 - 20, boxSize / 2, Math.random() * 40 - 20);
+        // 장애물 박스들
+        for (let i = 0; i < 40; i++) {
+            const h = Math.random() * 3 + 0.5;
+            const box = new THREE.Mesh(
+                new THREE.BoxGeometry(2, h, 2),
+                new THREE.MeshPhongMaterial({ color: Math.random() * 0xffffff })
+            );
+            box.position.set(Math.random() * 60 - 30, h / 2, Math.random() * 60 - 30);
             scene.add(box);
-            objects.push(box); // 충돌 대상 배열에 추가
+            objects.push(box);
         }
 
         // 4. 컨트롤 및 물리 변수
-        const controls = new PointerLockControls(mainCamera, document.body);
+        const controls = new PointerLockControls(camera, document.body);
         const instructions = document.getElementById('instructions');
 
         instructions.addEventListener('click', () => controls.lock());
@@ -82,20 +102,22 @@
         let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false, canJump = false;
         const velocity = new THREE.Vector3();
         const direction = new THREE.Vector3();
-        const raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0), 0, 1.7);
+        
+        // 레이캐스터 (바닥 및 벽 충돌 감지용)
+        const raycaster = new THREE.Raycaster();
 
-        // 5. 키보드 이벤트 (중복 제거 및 점프 추가)
-        const onKeyDown = (event) => {
-            switch (event.code) {
+        // 5. 키보드 이벤트
+        const onKeyDown = (e) => {
+            switch (e.code) {
                 case 'KeyW': moveForward = true; break;
                 case 'KeyA': moveLeft = true; break;
                 case 'KeyS': moveBackward = true; break;
                 case 'KeyD': moveRight = true; break;
-                case 'Space': if (canJump) velocity.y += 25; canJump = false; break;
+                case 'Space': if (canJump) velocity.y += CONFIG.jumpForce; canJump = false; break;
             }
         };
-        const onKeyUp = (event) => {
-            switch (event.code) {
+        const onKeyUp = (e) => {
+            switch (e.code) {
                 case 'KeyW': moveForward = false; break;
                 case 'KeyA': moveLeft = false; break;
                 case 'KeyS': moveBackward = false; break;
@@ -105,7 +127,7 @@
         document.addEventListener('keydown', onKeyDown);
         document.addEventListener('keyup', onKeyUp);
 
-        // 6. 애니메이션 루프
+        // 6. 업데이트 애니메이션 루프
         let prevTime = performance.now();
         function animate() {
             requestAnimationFrame(animate);
@@ -114,67 +136,71 @@
                 const time = performance.now();
                 const delta = (time - prevTime) / 1000;
 
-                // 6-1. 하단 충돌 감지 (바닥 및 개체 밟기)
-                raycaster.ray.origin.copy(mainCamera.position);
-                const intersections = raycaster.intersectObjects(objects, false);
-                const onObject = intersections.length > 0;
+                // 6-1. 바닥 충돌 및 밟기 감지
+                raycaster.set(camera.position, new THREE.Vector3(0, -1, 0));
+                const downIntersects = raycaster.intersectObjects(objects, false);
+                const onObject = downIntersects.length > 0 && downIntersects[0].distance < (CONFIG.playerHeight + 0.1);
 
-                // 6-2. 속도 및 중력 적용
-                velocity.x -= velocity.x * 10.0 * delta;
-                velocity.z -= velocity.z * 10.0 * delta;
-                velocity.y -= 9.8 * 8.0 * delta; // 중력 가속도
+                // 6-2. 속도 감쇠 (마찰력) 및 중력
+                velocity.x -= velocity.x * CONFIG.friction * delta;
+                velocity.z -= velocity.z * CONFIG.friction * delta;
+                velocity.y -= CONFIG.gravity * delta;
 
+                // 6-3. 이동 방향 계산
                 direction.z = Number(moveForward) - Number(moveBackward);
                 direction.x = Number(moveRight) - Number(moveLeft);
                 direction.normalize();
 
-                if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
-                if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
+                // 6-4. 벽 충돌 감지 (전후좌우 레이캐스트)
+                const checkCollision = (dirVector) => {
+                    const worldDir = dirVector.clone().applyQuaternion(camera.quaternion).setY(0).normalize();
+                    raycaster.set(camera.position, worldDir);
+                    return raycaster.intersectObjects(objects.filter(o => o !== floor)).length > 0 
+                           && raycaster.intersectObjects(objects.filter(o => o !== floor))[0].distance < CONFIG.collisionDist;
+                };
 
-                // 6-3. 상하 이동 처리 및 착지 판정
+                // 전진/후진 충돌 시 속도 차단
+                if (moveForward && checkCollision(new THREE.Vector3(0, 0, -1))) velocity.z = 0;
+                if (moveBackward && checkCollision(new THREE.Vector3(0, 0, 1))) velocity.z = 0;
+                if (moveLeft && checkCollision(new THREE.Vector3(-1, 0, 0))) velocity.x = 0;
+                if (moveRight && checkCollision(new THREE.Vector3(1, 0, 0))) velocity.x = 0;
+
+                // 6-5. 가속도 적용
+                if (moveForward || moveBackward) velocity.z -= direction.z * CONFIG.acceleration * delta;
+                if (moveLeft || moveRight) velocity.x -= direction.x * CONFIG.acceleration * delta;
+
+                // 6-6. 최종 위치 반영
                 if (onObject) {
                     velocity.y = Math.max(0, velocity.y);
                     canJump = true;
-                    // 물체 위에 서 있도록 높이 보정
-                    mainCamera.position.y = intersections[0].point.y + 1.6;
-                }
-
-                // 6-4. 좌우/전후 이동 시 벽 충돌 방지 (간이 구현)
-                // 이동할 방향으로 레이를 쏴서 너무 가까우면 속도를 0으로 만듦
-                const horizontalRaycaster = new THREE.Raycaster(mainCamera.position, new THREE.Vector3(), 0, 1);
-                
-                // 전진 방향 충돌 체크 예시
-                const worldDir = new THREE.Vector3();
-                mainCamera.getWorldDirection(worldDir).setY(0).normalize();
-                horizontalRaycaster.set(mainCamera.position, worldDir);
-                
-                if (horizontalRaycaster.intersectObjects(objects.filter(obj => obj !== floor)).length > 0) {
-                   if (moveForward) velocity.z = 0;
+                    // 물체 위에 딱 붙어 있게 보정
+                    camera.position.y = downIntersects[0].point.y + CONFIG.playerHeight;
                 }
 
                 controls.moveRight(-velocity.x * delta);
                 controls.moveForward(-velocity.z * delta);
-                mainCamera.position.y += (velocity.y * delta);
+                camera.position.y += (velocity.y * delta);
 
-                // 바닥 아래로 추락 방지
-                if (mainCamera.position.y < 1.6) {
+                // 최소 높이(바닥) 유지
+                if (camera.position.y < CONFIG.playerHeight) {
                     velocity.y = 0;
-                    mainCamera.position.y = 1.6;
+                    camera.position.y = CONFIG.playerHeight;
                     canJump = true;
                 }
 
                 prevTime = time;
             }
-            renderer.render(scene, mainCamera);
+            renderer.render(scene, camera);
         }
 
+        // 창 크기 조절 대응
         window.addEventListener('resize', () => {
-            mainCamera.aspect = window.innerWidth / window.innerHeight;
-            mainCamera.updateProjectionMatrix();
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        mainCamera.position.y = 1.6;
+        camera.position.y = CONFIG.playerHeight;
         animate();
     </script>
 </body>
